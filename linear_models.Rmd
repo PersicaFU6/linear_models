@@ -1,0 +1,240 @@
+---
+title: "linear models"
+author: "Yujing FU"
+date: "2024-11-07"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+
+set.seed(1)
+```
+
+Data cleaning
+```{r}
+data("nyc_airbnb")
+
+nyc_airbnb = 
+  nyc_airbnb |> 
+  mutate(stars = review_scores_location / 2) |> 
+  rename(
+    borough = neighbourhood_group,
+    neighborhood = neighbourhood) |> 
+  filter(borough != "Staten Island") |> 
+  select(price, stars, borough, neighborhood, room_type)
+```
+
+fit some model
+```{r}
+fit = lm(price ~ stars, data = nyc_airbnb)
+summary(fit)
+names(summary(fit))
+coef(fit)
+broom::tidy(fit) ##变为tibble df
+
+fit |> 
+  broom::tidy() |> 
+  select(term, estimate, p.value)
+
+fit |> 
+  broom::glance()
+```
+
+
+Try a bit more complex
+
+```{r}
+fit = lm(price ~ stars + borough, data = nyc_airbnb)
+fit |> 
+  broom::tidy() |> 
+  select(term, estimate, p.value) |> 
+  mutate(
+    term = str_replace(term, "borough", "Borough: ")
+    ) |> 
+  knitr::kable(digits=3)
+```
+这里borough是按照字母来排序的，如果要按frequency来排，前面+factor_freq()
+
+
+```{r}
+nyc_airbnb = 
+  nyc_airbnb |>
+  mutate(
+    borough = fct_infreq(borough),
+    room_type = fct_infreq(room_type))
+
+fit = lm(price ~ stars + borough, data = nyc_airbnb)
+```
+
+
+```{r}
+summary(fit)
+summary(fit)$coef
+coef(fit)
+fitted.values(fit)
+```
+
+```{r}
+fit |> 
+  broom::glance()
+```
+
+```{r}
+fit |> 
+  broom::tidy()
+```
+
+
+```{r}
+fit |> 
+  broom::tidy() |> 
+  select(term, estimate, p.value) |> 
+  mutate(term = str_replace(term, "^borough", "Borough: ")) |> 
+  knitr::kable(digits = 3)
+```
+
+## some diagnostics
+most disgnostics use residuals<br>
+modelr::add_predictions() 和 modelr::add_residuals() 可以直接将模型的预测值和残差加入原始数据框，方便进一步分析和可视化。例如，在模型拟合之后，可以快速查看每个数据点的预测值和实际值的差异（即残差）
+```{r}
+modelr::add_residuals(nyc_airbnb, fit)
+```
+
+
+```{r}
+modelr::add_predictions(nyc_airbnb, fit) |> 
+  ggplot(aes(x=resid))+
+  geom_histogram()
+```
+
+```{r}
+nyc_airbnb |> 
+  modelr::add_residuals(fit) |> 
+  ggplot(aes(x = borough, y = resid)) + geom_violin()+
+  ylim(-200, 500)
+```
+
+residual against stars
+```{r}
+nyc_airbnb |> 
+  modelr::add_residuals(fit) |> #modelr::add_residuals(nyc_airbnb, fit) |> 
+  ggplot(aes(x = stars, y = resid)) + geom_point()
+```
+
+residual against fitted value
+```{r}
+nyc_airbnb |> 
+  modelr::add_residuals(fit) |> #自动加了一列叫resid的
+  modelr::add_predictions(fit) |> #自动加了一列叫pred的
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point()
+```
+什么意义？？？？？？？？？？？？？？？？？？
+
+验证room type是否和price相关
+H0:增加的变量 room_type 对模型拟合没有显著贡献，即 fit_null 模型足够解释数据。
+备择假设 
+H1:增加的变量 room_type 显著提高了模型的拟合效果，即 fit_alt 比 fit_null 更适合解释数据。
+```{r}
+fit |> 
+  broom::tidy()
+
+fit_null = lm(price ~ stars + borough, data = nyc_airbnb)
+fit_alt = lm(price ~ stars + borough + room_type, data = nyc_airbnb)
+```
+
+```{r}
+fit_null |> 
+  broom::tidy()
+
+fit_alt |> 
+  broom::tidy()
+```
+
+
+```{r}
+anova(fit_null, fit_alt) |> 
+  broom::tidy()
+```
+
+
+## do effects differ across boroughs
+
+First, use a lot od interactions
+
+```{r}
+nyc_airbnb |> 
+  lm(price ~ stars * borough + room_type * borough, data = _) |>  #data = _因为前面已经说明了dataset
+  broom::tidy() |> 
+  knitr::kable(digits = 3)
+```
+coef解释：？？
+
+Could just fit separate models.
+```{r}
+nyc_airbnb |> 
+  filter(borough == "Manhattan") |> 
+  lm(price ~ stars +room_type, data = _) |> 
+  broom::tidy()
+```
+
+Get fancy and use list columns
+
+
+```{r}
+nest_lm_res =
+  nyc_airbnb |> 
+  nest(data = -borough) |> # 按 borough 分组，嵌套数据得到四个不同的tibble_df
+  mutate(
+    models = map(data, \(x) lm(price ~ stars + room_type, data = x)),
+    results = map(models, broom::tidy)) |> #四行：brough, data, model, results
+  select(-data, -models) |> 
+  unnest(results) |> 
+  select(borough, term, estimate) |> 
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  )
+nest_lm_res
+```
+more type across Manhattan:
+
+```{r}
+nyc_airbnb |> 
+  filter(borough == "Manhattan",
+         neighborhood == "Chinatown") |> 
+  lm(price ~ stars + room_type, data = _) |> 
+  broom:tidy()
+```
+#可以用上面用样的方法看所有neighborhood
+```{r}
+m_neighborhood =
+  nyc_airbnb |> 
+  filter(borough == "Manhattan") |> 
+  nest(data = -(borough:neighborhood)) |> # 按 borough和neighborhood分组
+  mutate(
+    models = map(data, \(x) lm(price ~ stars + room_type, data = x)),
+    results = map(models, broom::tidy)) |> #5行：brough, neighborhood, data, model, results(有些可能没有coef，因为数据太少)
+  select(neighborhood, results) |> 
+  unnest(results)
+```
+
+look at the effect of different room type
+```{r}
+m_neighborhood |> 
+  filter(str_detect(term, "room_type")) |> #为啥select不行？filter是row，select是col
+  ggplot(aes(x = term, y = estimate))+
+  goem_boxplot
+```
+
+```{r}
+nest_lm_res |> 
+  select(borough, term, estimate) |> 
+  mutate(term = fct_inorder(term)) |> 
+  pivot_wider(
+    names_from = term, values_from = estimate) |> 
+  knitr::kable(digits = 3)
+```
+
+
